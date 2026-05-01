@@ -1,0 +1,18 @@
+{
+    # 保证 WAF 拦截器在最前排
+    order coraza_waf first
+}
+
+:8080 {
+    coraza_waf {
+        directives `
+            SecRuleEngine On
+            SecRequestBodyAccess On
+            
+            SecRule REQUEST_HEADERS:Content-Type "application/x-www-form-urlencoded" "id:'200002',phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=URLENCODED"
+            
+            Include /etc/caddy/active_rules.conf
+        `
+    }
+    respond "Backend response: WAF Passed! No malicious payload detected." 200
+}

@@ -14,13 +14,14 @@ except ImportError:
 
 API_KEY = os.getenv("DASHSCOPE_API_KEY")
 MODEL_NAME = "qwen-plus"
-DATASET_PATH = ".\\output\\msu\\csic_msu_data_mini.json"
+DATASET_PATH = ".\\output\\msu\\csic_msu_data.json"
 
 SYSTEM_PROMPT = """Your primary objective is to act as an expert Web Application Firewall (WAF). Your task is to analyze HTTP request segments to pinpoint malicious payloads and anomalies.
-The input is an HTTP request segmented into Minimal Semantic Units (MSUs), presented as a JSON structure. Note that pre-decoded versions of certain fields may be provided alongside the original data (e.g., keys or strings containing `_decode_`).
-Evaluate each MSU and output a JSON dictionary where the key is the exact original MSU string, and the value is either 1 (malicious/anomalous) or 0 (benign).
+The input JSON object contains `msu_list` (Minimal Semantic Units) and optionally `decoded_params`: a dictionary whose keys follow `<param_name>_decode` and values are decoded parameter payloads for obfuscated inputs (matching the preprocessor output).
+Keys in your response must be ONLY the exact strings appearing in `msu_list`; do not emit keys from `decoded_params`. Use decoded values solely to infer whether the corresponding MSU (same parameter in `key=value` form within `msu_list`) should be flagged.
+Evaluate each MSU in `msu_list` with a value of 1 (malicious/anomalous) or 0 (benign).
 CORE ANALYSIS CRITERIA:
-1. Decoded Fields Utilization: Explicitly leverage any provided decoded fields (e.g., `pwd_decode_1`) to detect hidden payloads (SQLi, XSS, etc.) that were originally obfuscated.
+1. Decoded Fields Utilization: When `decoded_params` is present (e.g. `pwd_decode`, `nombre_decode`), use it to detect SQLi/XSS probes hidden by URL-encoding; assign the verdict to the original `key=value` MSU entry in `msu_list`.
 2. Suspicious Paths: Flag directory traversal attempts (e.g., `../`) and requests targeting known vulnerable default directories or administrative interfaces (e.g., `/IISSamples/`, `/admin/`, `.bak` files).
 3. General Threat Detection: Apply standard WAF security heuristics to identify syntax breakers and payload signatures within the MSUs.
 FORMAT REQUIREMENTS:
@@ -32,7 +33,17 @@ client = OpenAI(
 )
 
 
-def locate_payload_with_llm(msu_list):
+def build_llm_input(req):
+    body = {"msu_list": req["msu_list"]}
+    decoded = req.get("decoded_params")
+    if decoded:
+        body["decoded_params"] = decoded
+    return body
+
+
+def locate_payload_with_llm(llm_input):
+    if isinstance(llm_input, list):
+        llm_input = {"msu_list": llm_input}
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -45,7 +56,15 @@ def locate_payload_with_llm(msu_list):
         },
         {
             "role": "user",
-            "content": f"User Input: {json.dumps(msu_list, ensure_ascii=False)}",
+            "content": """User Input: {"msu_list": ["GET", "/shop", "pwd=foo%2527"], "decoded_params": {"pwd_decode": "foo'"}}""",
+        },
+        {
+            "role": "assistant",
+            "content": """{"GET": 0, "/shop": 0, "pwd=foo%2527": 1}""",
+        },
+        {
+            "role": "user",
+            "content": f"User Input: {json.dumps(llm_input, ensure_ascii=False)}",
         },
     ]
 
@@ -131,7 +150,7 @@ if __name__ == "__main__":
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_req = {
-            executor.submit(locate_payload_with_llm, req["msu_list"]): req
+            executor.submit(locate_payload_with_llm, build_llm_input(req)): req
             for req in dataset
         }
 

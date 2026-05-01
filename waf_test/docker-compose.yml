@@ -1,0 +1,10 @@
+services:
+  caddy-waf:
+    build: .
+    container_name: local-waf-target
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./active_rules.conf:/etc/caddy/active_rules.conf
+    restart: unless-stopped

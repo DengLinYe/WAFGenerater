@@ -1,0 +1,305 @@
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from urllib.parse import unquote_to_bytes
+
+MERGE_THRESHOLD = 0.25
+RULE_ID_START = 9000000
+RESULT_DIR = ".\\output\\llm_results"
+OUTPUT_DIR = ".\\output\\waf_rules"
+MAX_URL_DECODE_ROUNDS = 16
+WAF_URL_DECODE_TRANSFORMS = 4
+
+HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}
+_HEADER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\-]+:\s")
+_URL_PATH_RE = re.compile(r"^(?:https?://[^/]+)?(/.*)$")
+
+def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
+    cur_str = value
+    for _ in range(max_rounds):
+        raw_bytes = unquote_to_bytes(cur_str.replace("+", " "))
+        try:
+            nxt_str = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            nxt_str = raw_bytes.decode("latin-1")
+        if nxt_str == cur_str:
+            break
+        cur_str = nxt_str
+    return cur_str
+
+def _classify_msu(msu, method):
+    if msu in HTTP_METHODS:
+        return None
+    if msu.startswith("http://") or msu.startswith("https://") or msu.startswith("/"):
+        return "REQUEST_FILENAME"
+    if _HEADER_RE.match(msu):
+        return "REQUEST_HEADERS"
+    if "=" in msu:
+        return "ARGS_POST" if method == "POST" else "ARGS_GET"
+    return None
+
+def _extract_payload(msu, variable, decoded_params=None):
+    if variable in ("ARGS_GET", "ARGS_POST") and "=" in msu:
+        key, val = msu.split("=", 1)
+        decoded_key = f"{key.strip()}_decode"
+        if decoded_params and decoded_key in decoded_params:
+            return decoded_params[decoded_key]
+        return _iterative_smart_unquote(val)
+    if variable == "REQUEST_HEADERS" and ": " in msu:
+        return _iterative_smart_unquote(msu.split(": ", 1)[1])
+    if variable == "REQUEST_FILENAME":
+        m = _URL_PATH_RE.match(msu)
+        if m:
+            return _iterative_smart_unquote(m.group(1))
+    return _iterative_smart_unquote(msu)
+
+def extract_malicious_payloads(results):
+    entries = []
+    for req in results:
+        prediction = req.get("prediction", {})
+        msu_list = req.get("msu_list", [])
+        decoded_params = req.get("decoded_params", {})
+        method = msu_list[0] if msu_list else "GET"
+        for msu, label in prediction.items():
+            if label != 1:
+                continue
+            variable = _classify_msu(msu, method)
+            if variable is None:
+                continue
+            payload = _extract_payload(msu, variable, decoded_params)
+            if payload:
+                entries.append({"payload": payload, "variable": variable})
+    return entries
+
+def edit_distance(a, b):
+    m, n = len(a), len(b)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev = dp[0]
+        dp[0] = i
+        for j in range(1, n + 1):
+            temp = dp[j]
+            dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+            prev = temp
+    return dp[n]
+
+def lcs_two(a, b):
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    result = []
+    i, j = m, n
+    while i > 0 and j > 0:
+        if a[i - 1] == b[j - 1]:
+            result.append(a[i - 1])
+            i -= 1
+            j -= 1
+        elif dp[i - 1][j] >= dp[i][j - 1]:
+            i -= 1
+        else:
+            j -= 1
+    return "".join(reversed(result))
+
+def lcs_multiple(strings):
+    if not strings:
+        return ""
+    
+    strings = sorted(strings, key=len)
+    result = strings[0]
+    for s in strings[1:]:
+        result = lcs_two(result, s)
+        if not result:
+            break
+    return result
+
+def build_regex(lcs, all_payloads):
+    if not lcs:
+        return None
+
+    segments = []
+    current_segment = lcs[0]
+    
+    for i in range(1, len(lcs)):
+        current_pair = lcs[i - 1] + lcs[i]
+        is_contiguous = True
+        
+        for payload in all_payloads:
+            if current_pair not in payload:
+                is_contiguous = False
+                break
+                
+        if is_contiguous:
+            current_segment += lcs[i]
+        else:
+            segments.append(current_segment)
+            current_segment = lcs[i]
+            
+    segments.append(current_segment)
+    
+    escaped_segments = [re.escape(seg) for seg in segments if seg]
+    return ".*".join(escaped_segments) if escaped_segments else None
+
+def _find_representative(members):
+    if len(members) == 1:
+        return members[0]
+    best_avg = None
+    best_rep = members[0]
+    for candidate in members:
+        others = [m for m in members if m != candidate]
+        avg = sum(edit_distance(candidate, o) for o in others) / len(others)
+        if best_avg is None or avg < best_avg:
+            best_avg = avg
+            best_rep = candidate
+    return best_rep
+
+def hierarchical_cluster(payloads):
+    groups = [{"members": [p], "rep": p} for p in payloads]
+
+    while True:
+        n = len(groups)
+        if n <= 1:
+            break
+
+        best_dist = None
+        best_i = best_j = -1
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                rep_i, rep_j = groups[i]["rep"], groups[j]["rep"]
+                d = edit_distance(rep_i, rep_j)
+                threshold = MERGE_THRESHOLD * (len(rep_i) + len(rep_j))
+                if d <= threshold:
+                    if best_dist is None or d < best_dist:
+                        best_dist = d
+                        best_i, best_j = i, j
+
+        if best_i == -1:
+            break
+
+        merged = groups[best_i]["members"] + groups[best_j]["members"]
+        new_rep = _find_representative(merged)
+        new_group = {"members": merged, "rep": new_rep}
+        groups = [g for k, g in enumerate(groups) if k not in (best_i, best_j)]
+        groups.append(new_group)
+
+    return groups
+
+def generate_rules(results, rule_id_start=RULE_ID_START):
+    entries = extract_malicious_payloads(results)
+    if not entries:
+        return []
+
+    by_variable = {}
+    for e in entries:
+        by_variable.setdefault(e["variable"], []).append(e["payload"])
+
+    rules = []
+    rule_id = rule_id_start
+
+    for variable, payloads in sorted(by_variable.items()):
+        unique_payloads = list(dict.fromkeys(payloads))
+        clusters = hierarchical_cluster(unique_payloads)
+
+        for cluster in clusters:
+            members = cluster["members"]
+            lcs = lcs_multiple(members)
+            regex = build_regex(lcs, members)
+
+            if not regex:
+                regex = re.escape(cluster["rep"])
+
+            rules.append(
+                {
+                    "id": rule_id,
+                    "variable": variable,
+                    "regex": regex,
+                    "lcs": lcs,
+                    "cluster_size": len(members),
+                    "members": members,
+                }
+            )
+            rule_id += 1
+
+    return rules
+
+def format_seclang(rule):
+    transforms = ",".join(["t:urlDecodeUni"] * WAF_URL_DECODE_TRANSFORMS)
+    action = (
+        f"id:{rule['id']},phase:2,deny,status:403,log,t:none,{transforms},"
+        f"msg:'Auto-generated WAF rule (cluster_size={rule['cluster_size']})'"
+    )
+    regex = rule["regex"].replace("\\", "\\\\").replace('"', '\\"')
+    return f'SecRule {rule["variable"]} "@rx {regex}" "{action}"'
+
+def find_latest_result(result_dir):
+    if not os.path.exists(result_dir):
+        return None
+    candidates = [
+        f for f in os.listdir(result_dir)
+        if f.startswith("llm_predicted_results_") and f.endswith(".json")
+    ]
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return os.path.join(result_dir, candidates[0])
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        input_file = sys.argv[1]
+    else:
+        input_file = find_latest_result(RESULT_DIR)
+        if input_file is None:
+            print(f"[Error] 在 {RESULT_DIR} 中未找到任何结果文件")
+            sys.exit(1)
+        print(f"[Info] 使用最新结果文件: {input_file}")
+
+    if not os.path.exists(input_file):
+        print(f"[Error] 找不到文件: {input_file}")
+        sys.exit(1)
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        results = json.load(f)
+
+    print(f"[Info] 已加载 {len(results)} 条预测结果，开始生成 WAF 规则...")
+
+    rules = generate_rules(results)
+
+    if not rules:
+        print("[Warning] 未提取到任何恶意载荷，无规则生成。")
+        sys.exit(0)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_conf = os.path.join(OUTPUT_DIR, f"waf_rules_{stamp}.conf")
+    output_json = os.path.join(OUTPUT_DIR, f"waf_rules_{stamp}.json")
+
+    with open(output_conf, "w", encoding="utf-8") as f:
+        f.write("# Auto-generated WAF rules\n")
+        f.write(f"# Source : {input_file}\n")
+        f.write(f"# Generated: {datetime.now().isoformat()}\n\n")
+        for rule in rules:
+            f.write(format_seclang(rule) + "\n")
+
+    with open(output_json, "w", encoding="utf-8") as f:
+        json.dump(rules, f, indent=2, ensure_ascii=False)
+
+    by_variable_count = {}
+    for rule in rules:
+        variable = rule["variable"]
+        by_variable_count[variable] = by_variable_count.get(variable, 0) + 1
+
+    print(f"\n[Summary] 共生成 {len(rules)} 条规则")
+    print("  按变量统计:")
+    for variable in sorted(by_variable_count):
+        print(f"    {variable}: {by_variable_count[variable]}")
+
+    print(f"\n[Info] 规则已保存至:")
+    print(f"  {output_conf}")
+    print(f"  {output_json}")
