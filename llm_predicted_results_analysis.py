@@ -53,4 +53,4 @@ def evaluate_results(result_file):
 
 
 if __name__ == "__main__":
-    evaluate_results(".\\llm_output\\llm_predicted_results.json")
+    evaluate_results(".\\output\\llm_results\\llm_predicted_results.json")

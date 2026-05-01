@@ -1,6 +1,50 @@
 import json
 import os
+import random
+from urllib.parse import unquote_plus
+from urllib.parse import unquote_to_bytes
 
+MAX_DATA_COUNT = 50
+OUTPUT_PATH = ".\\output\\msu\\csic_msu_data_mini.json"
+MAX_URL_DECODE_ROUNDS = 16
+
+def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
+    cur_str = value
+    for _ in range(max_rounds):
+        raw_bytes = unquote_to_bytes(cur_str.replace('+', ' '))
+        
+        # 2. 尝试用 UTF-8 解码
+        try:
+            nxt_str = raw_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            nxt_str = raw_bytes.decode('latin-1')
+        
+        if nxt_str == cur_str:
+            break
+        
+        cur_str = nxt_str
+        
+    return cur_str
+
+def _is_kv_param_msu(msu):
+    if "=" not in msu:
+        return False
+    key, _val = msu.split("=", 1)
+    key = key.strip()
+    return bool(key) and (":" not in key)
+
+def collect_decoded_param_fields(msu_list):
+    out = {}
+    for msu in msu_list:
+        if not _is_kv_param_msu(msu):
+            continue
+        key, val = msu.split("=", 1)
+        key = key.strip()
+        
+        decoded = _iterative_smart_unquote(val)
+        if decoded != val:
+            out[f"{key}_decode"] = decoded
+    return out
 
 def parse_http_to_msu(raw_request):
     msu_list = []
@@ -45,8 +89,7 @@ def parse_http_to_msu(raw_request):
 
     return msu_list
 
-
-def process_csic_robust(filename, label):
+def process_csic(filename, label):
     if not os.path.exists(filename):
         return []
 
@@ -67,19 +110,8 @@ def process_csic_robust(filename, label):
 
     processed_data = []
     juicy_keywords = [
-        "union",
-        "select",
-        "script",
-        "alert",
-        "or ",
-        "and ",
-        "drop",
-        "passwd",
-        "%27",
-        "%22",
-        "1=1",
-        "<",
-        ">",
+        "union", "select", "script", "alert", "or ", "and ", "drop", 
+        "passwd", "%27", "%22", "1=1", "<", ">", "%3e", "%3c"
     ]
 
     for idx, req_str in enumerate(requests):
@@ -96,26 +128,27 @@ def process_csic_robust(filename, label):
         if not msu_array:
             continue
 
-        processed_data.append(
-            {"id": f"CSIC_{label}_{idx}", "type": label, "msu_list": msu_array}
-        )
+        row = {"id": f"CSIC_{label}_{idx}", "type": label, "msu_list": msu_array}
+        decoded_fields = collect_decoded_param_fields(msu_array)
+        if decoded_fields:
+            row["decoded_params"] = decoded_fields
+        processed_data.append(row)
 
-        if len(processed_data) >= 50:
+        if len(processed_data) >= MAX_DATA_COUNT:
             break
 
     return processed_data
 
-
 if __name__ == "__main__":
-    normal_file = ".\\HTTP_DATASET_CSIC_2010\\normalTrafficTest.txt"
-    anomalous_file = ".\\HTTP_DATASET_CSIC_2010\\anomalousTrafficTest.txt"
-    output_file = ".\\msu\\csic_msu_data.json"
+    normal_file = ".\\data\\HTTP_DATASET_CSIC_2010\\normalTrafficTest.txt"
+    anomalous_file = ".\\data\\HTTP_DATASET_CSIC_2010\\anomalousTrafficTest.txt"
 
-    normal_data = process_csic_robust(normal_file, "normal")
-    anomalous_data = process_csic_robust(anomalous_file, "anomalous")
+    normal_data = process_csic(normal_file, "normal")
+    anomalous_data = process_csic(anomalous_file, "anomalous")
 
     final_data = normal_data + anomalous_data
+    random.shuffle(final_data)
 
     if final_data:
-        with open(output_file, "w", encoding="utf-8") as f:
+        with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
             json.dump(final_data, f, indent=2, ensure_ascii=False)

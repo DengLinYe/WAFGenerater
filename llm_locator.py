@@ -1,17 +1,30 @@
 import json
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 from openai import APIError, OpenAI
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 API_KEY = os.getenv("DASHSCOPE_API_KEY")
 MODEL_NAME = "qwen-plus"
+DATASET_PATH = ".\\output\\msu\\csic_msu_data_mini.json"
 
-SYSTEM_PROMPT = """Your task is to locate malicious payloads in an HTTP request.
-The HTTP request will be divided into minimal semantic units (MSUs), and the input is an array of strings, where each string represents an MSU of the HTTP request.
-The output should be a dictionary in JSON format, where the key is a string from the input array, and the value is 0 or 1. A value of 0 indicates that the unit does not contain malicious payloads, and a value of 1 means otherwise.
-Please return ONLY the JSON dictionary, without any markdown formatting or explanations."""
+SYSTEM_PROMPT = """Your primary objective is to act as an expert Web Application Firewall (WAF). Your task is to analyze HTTP request segments to pinpoint malicious payloads and anomalies.
+The input is an HTTP request segmented into Minimal Semantic Units (MSUs), presented as a JSON structure. Note that pre-decoded versions of certain fields may be provided alongside the original data (e.g., keys or strings containing `_decode_`).
+Evaluate each MSU and output a JSON dictionary where the key is the exact original MSU string, and the value is either 1 (malicious/anomalous) or 0 (benign).
+CORE ANALYSIS CRITERIA:
+1. Decoded Fields Utilization: Explicitly leverage any provided decoded fields (e.g., `pwd_decode_1`) to detect hidden payloads (SQLi, XSS, etc.) that were originally obfuscated.
+2. Suspicious Paths: Flag directory traversal attempts (e.g., `../`) and requests targeting known vulnerable default directories or administrative interfaces (e.g., `/IISSamples/`, `/admin/`, `.bak` files).
+3. General Threat Detection: Apply standard WAF security heuristics to identify syntax breakers and payload signatures within the MSUs.
+FORMAT REQUIREMENTS:
+Return ONLY a valid JSON dictionary. Do NOT wrap the JSON in markdown blocks (e.g., ```json). Do NOT provide any explanations, comments, or introductory text. The output must be strictly parseable by standard JSON libraries."""
 
 client = OpenAI(
     api_key=API_KEY,
@@ -60,67 +73,155 @@ def locate_payload_with_llm(msu_list):
         return None
 
 
+def _request_predicted_malicious(prediction_dict):
+    if not isinstance(prediction_dict, dict):
+        return False
+    return any(v == 1 for v in prediction_dict.values())
+
+
+def _summarize_localization(results):
+    tp = tn = fp = fn = 0
+    fp_ids = []
+    fn_ids = []
+    for req in results:
+        actually_malicious = req.get("type") == "anomalous"
+        pred = req.get("prediction", {})
+        predicted_malicious = _request_predicted_malicious(pred)
+        if actually_malicious and predicted_malicious:
+            tp += 1
+        elif not actually_malicious and not predicted_malicious:
+            tn += 1
+        elif not actually_malicious and predicted_malicious:
+            fp += 1
+            fp_ids.append(req.get("id"))
+        elif actually_malicious and not predicted_malicious:
+            fn += 1
+            fn_ids.append(req.get("id"))
+    total = tp + tn + fp + fn
+    accuracy = (tp + tn) / total if total else 0.0
+    return accuracy, fp_ids, fn_ids, tp, tn, fp, fn, total
+
+
 if __name__ == "__main__":
-    input_file = ".\\msu\\csic_msu_data.json"
-    output_file = ".\\llm_output\\llm_predicted_results.json"
+    _output_dir = ".\\output\\llm_results"
+    os.makedirs(_output_dir, exist_ok=True)
+    _stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = os.path.join(
+        _output_dir,
+        f"llm_predicted_results_{_stamp}.json",
+    )
 
-    if not os.path.exists(input_file):
-        print(f"[Error] 找不到数据文件: {input_file}")
-        exit()
+    if not os.path.exists(DATASET_PATH):
+        print(f"[Error] 找不到数据文件: {DATASET_PATH}")
+        sys.exit(1)
 
-    with open(input_file, "r", encoding="utf-8") as f:
+    with open(DATASET_PATH, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
-    print(f"[Info] 开始调用 {MODEL_NAME} 进行恶意载荷定位...")
-    print(f"[Info] 共计需处理请求数量: {len(dataset)}\n")
+    n_total = len(dataset)
+    print(f"[Info] 开始调用 {MODEL_NAME} 进行恶意载荷定位，共 {n_total} 条")
 
     results = []
     quota_exhausted = False
+    completed = 0
+    failed_ids = []
+    tqdm_disable = tqdm is None
 
     total_start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_req = {
             executor.submit(locate_payload_with_llm, req["msu_list"]): req
             for req in dataset
         }
 
-        for future in as_completed(future_to_req):
+        progress = None
+        if not tqdm_disable:
+            progress = tqdm(
+                total=n_total,
+                desc="LLM localize",
+                unit="req",
+                file=sys.stderr,
+                dynamic_ncols=True,
+                smoothing=0.05,
+            )
+        iterator = as_completed(future_to_req)
+
+        for future in iterator:
             req = future_to_req[future]
             try:
                 predicted_json = future.result()
 
                 if predicted_json == "QUOTA_EXHAUSTED":
-                    print("[Warning] 额度耗尽，停止提交新任务。")
+                    print(
+                        "[Warning] 额度耗尽，停止提交新任务。",
+                        file=sys.stderr,
+                    )
                     quota_exhausted = True
                     executor.shutdown(wait=False, cancel_futures=True)
-                    break
-
-                if predicted_json:
+                elif predicted_json:
                     req["prediction"] = predicted_json
                     results.append(req)
-                    malicious_items = [k for k, v in predicted_json.items() if v == 1]
-                    if malicious_items:
-                        print(
-                            f"    [Info] ID:{req['id']} 识别到恶意参数: {malicious_items}"
-                        )
-                    else:
-                        print(f"    [Info] ID:{req['id']} 未检测到异常载荷。")
                 else:
-                    print(f"    [Info] ID:{req['id']} 预测失败。")
+                    failed_ids.append(req.get("id"))
 
             except Exception as exc:
-                print(f"    [Error] ID:{req['id']} 产生异常: {exc}")
+                failed_ids.append(req.get("id"))
+                print(f"[Error] ID:{req['id']} 异常: {exc}", file=sys.stderr)
 
-    total_end_time = time.time()
+            completed += 1
+            elapsed = time.time() - total_start_time
+            if tqdm_disable:
+                rate = elapsed / completed
+                eta_s = rate * max(0, n_total - completed)
+                filled = min(40, int(40 * completed / max(1, n_total)))
+                bar = "=" * filled + "-" * (40 - filled)
+                sys.stderr.write(
+                    f"\r[{bar}] {completed}/{n_total} ETA {eta_s:.0f}s "
+                )
+                sys.stderr.flush()
+            else:
+                progress.update(1)
+                eta_s = (elapsed / completed) * max(0, n_total - completed)
+                progress.set_postfix(
+                    {"ETA_s": f"{eta_s:.0f}", "elapsed_s": f"{elapsed:.1f}"},
+                    refresh=True,
+                )
+
+            if quota_exhausted:
+                break
+
+        if tqdm_disable:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
+        else:
+            progress.close()
+
+    total_wall = time.time() - total_start_time
+    avg_each = total_wall / completed if completed else 0.0
 
     if results:
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\n[Info] 任务结束。成功生成 {len(results)} 条结果。")
-        print(f"[Info] 总耗时: {total_end_time - total_start_time:.2f} 秒！")
-        print(f"[Info] 数据已保存至: {output_file}")
+
+        acc, fp_ids, fn_ids, tp, tn, fp, fn, labelled = _summarize_localization(
+            results
+        )
+
+        print(f"\n[Summary] 成功写入 {len(results)} 条 -> {output_file}")
+        print(f"  请求级准确率 (仅成功返回的 {labelled} 条): {acc:.2%}")
+        print(f"  TP={tp} TN={tn} FP={fp} FN={fn}")
+        print(f"  误报 (正常判恶) ID: {fp_ids}")
+        print(f"  漏报 (异常未判恶) ID: {fn_ids}")
+        print(f"  总耗时: {total_wall:.2f}s  平均每条完成耗时: {avg_each:.2f}s")
+        if failed_ids:
+            print(f"  [Note] API/解析失败 {len(failed_ids)} 条，未计入上表。")
+            print(f"  失败 ID: {failed_ids}")
         if quota_exhausted:
-            print("[Warning] 额度已耗尽，请更换 API Key 后继续处理剩余数据。")
+            print(
+                "[Warning] 额度已耗尽，请更换 API Key 后处理未完成数据。",
+                file=sys.stderr,
+            )
     else:
         print("\n[Warning] 未获得任何有效结果，文件未保存。")
+        print(f"  总耗时: {total_wall:.2f}s  平均每条完成耗时: {avg_each:.2f}s")

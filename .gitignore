@@ -1,4 +1,7 @@
 /venv/
 __pycache__/
 *.pyc
-aliyun-apikey.csv
+.cursorignore
+ContentForCursor.md
+data/
+output/
