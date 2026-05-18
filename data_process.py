@@ -1,19 +1,24 @@
 import json
 import os
 import random
-from urllib.parse import unquote_plus
 from urllib.parse import unquote_to_bytes
 
-MAX_DATA_COUNT = 50
-OUTPUT_PATH = ".\\output\\msu\\csic_msu_data_mini.json"
+MAX_DATA_COUNT = 500
+OUTPUT_PATH = ".\\output\\msu\\csic_msu_data_max.json"
 MAX_URL_DECODE_ROUNDS = 16
+
+
+# ANOMALOUS_FILTER_KEYWORDS = (
+#     "union", "select", "script", "alert", "or ", "and ", "drop",
+#     "passwd", "%27", "%22", "1=1", "<", ">", "%3e", "%3c",
+# )
+ANOMALOUS_FILTER_KEYWORDS = ()
 
 def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
     cur_str = value
     for _ in range(max_rounds):
         raw_bytes = unquote_to_bytes(cur_str.replace('+', ' '))
         
-        # 2. 尝试用 UTF-8 解码
         try:
             nxt_str = raw_bytes.decode('utf-8')
         except UnicodeDecodeError:
@@ -109,19 +114,18 @@ def process_csic(filename, label):
         requests.append("".join(current_req))
 
     processed_data = []
-    juicy_keywords = [
-        "union", "select", "script", "alert", "or ", "and ", "drop", 
-        "passwd", "%27", "%22", "1=1", "<", ">", "%3e", "%3c"
-    ]
+    keywords = ANOMALOUS_FILTER_KEYWORDS or ()
+    if isinstance(keywords, str):
+        keywords = (keywords,)
 
     for idx, req_str in enumerate(requests):
         req_str = req_str.strip()
         if not req_str:
             continue
 
-        if label == "anomalous":
+        if label == "anomalous" and keywords:
             req_lower = req_str.lower()
-            if not any(k in req_lower for k in juicy_keywords):
+            if not any(k.lower() in req_lower for k in keywords):
                 continue
 
         msu_array = parse_http_to_msu(req_str)

@@ -12,9 +12,41 @@ OUTPUT_DIR = ".\\output\\waf_rules"
 MAX_URL_DECODE_ROUNDS = 16
 WAF_URL_DECODE_TRANSFORMS = 4
 
+NORMALIZE_LOWERCASE = True
+NORMALIZE_WHITESPACE = True
+
 HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}
 _HEADER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\-]+:\s")
 _URL_PATH_RE = re.compile(r"^(?:https?://[^/]+)?(/.*)$")
+
+
+def _sanitize_rx_for_modsecurity(pattern):
+    if not pattern or not str(pattern).strip():
+        return "."
+    s = str(pattern)
+    while s:
+        tail = len(s) - 1
+        n = 0
+        while tail >= 0 and s[tail] == "\\":
+            n += 1
+            tail -= 1
+        if n % 2 == 0:
+            return s if s else "."
+        s = s[:-1]
+    return "."
+
+
+def _escape_pattern_for_seclang_rx_quotes(pc_regex):
+    return pc_regex.replace('"', '\\"')
+
+
+def _validate_pc_regex(pc_regex):
+    try:
+        re.compile(pc_regex)
+    except re.error:
+        return False
+    return True
+
 
 def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
     cur_str = value
@@ -125,15 +157,19 @@ def build_regex(lcs, all_payloads):
 
     segments = []
     current_segment = lcs[0]
-    
+    break_chars = {"'", '"', "(", ")", ";", "=", ",", "<", ">", "-", "/"}
+
     for i in range(1, len(lcs)):
-        current_pair = lcs[i - 1] + lcs[i]
         is_contiguous = True
+        target_sub = current_segment + lcs[i]
         
-        for payload in all_payloads:
-            if current_pair not in payload:
-                is_contiguous = False
-                break
+        if lcs[i-1] in break_chars or lcs[i] in break_chars:
+            is_contiguous = False
+        else:
+            for payload in all_payloads:
+                if target_sub not in payload:
+                    is_contiguous = False
+                    break
                 
         if is_contiguous:
             current_segment += lcs[i]
@@ -144,7 +180,12 @@ def build_regex(lcs, all_payloads):
     segments.append(current_segment)
     
     escaped_segments = [re.escape(seg) for seg in segments if seg]
-    return ".*".join(escaped_segments) if escaped_segments else None
+    regex_str = ".*".join(escaped_segments) if escaped_segments else None
+    
+    if regex_str:
+        regex_str = re.sub(r'[^\x00-\x7F]', '.', regex_str)
+    
+    return regex_str
 
 def _find_representative(members):
     if len(members) == 1:
@@ -204,16 +245,25 @@ def generate_rules(results, rule_id_start=RULE_ID_START):
     rule_id = rule_id_start
 
     for variable, payloads in sorted(by_variable.items()):
+        if NORMALIZE_LOWERCASE:
+            payloads = [p.strip().lower() for p in payloads]
+        else:
+            payloads = [p.strip() for p in payloads]
         unique_payloads = list(dict.fromkeys(payloads))
         clusters = hierarchical_cluster(unique_payloads)
 
         for cluster in clusters:
             members = cluster["members"]
+            members = [m.strip() for m in members]
             lcs = lcs_multiple(members)
             regex = build_regex(lcs, members)
 
             if not regex:
                 regex = re.escape(cluster["rep"])
+
+            regex = _sanitize_rx_for_modsecurity(regex)
+            if not _validate_pc_regex(regex):
+                regex = "."
 
             rules.append(
                 {
@@ -230,12 +280,25 @@ def generate_rules(results, rule_id_start=RULE_ID_START):
     return rules
 
 def format_seclang(rule):
-    transforms = ",".join(["t:urlDecodeUni"] * WAF_URL_DECODE_TRANSFORMS)
+    parts = ["t:none"]
+    parts += ["t:urlDecodeUni"] * WAF_URL_DECODE_TRANSFORMS
+    if NORMALIZE_LOWERCASE:
+        parts.append("t:lowercase")
+    if NORMALIZE_WHITESPACE:
+        parts.append("t:compressWhitespace")
+    transforms = ",".join(parts)
     action = (
-        f"id:{rule['id']},phase:2,deny,status:403,log,t:none,{transforms},"
+        f"id:{rule['id']},phase:2,deny,status:403,log,{transforms},"
         f"msg:'Auto-generated WAF rule (cluster_size={rule['cluster_size']})'"
     )
-    regex = rule["regex"].replace("\\", "\\\\").replace('"', '\\"')
+    regex = _sanitize_rx_for_modsecurity(rule["regex"])
+    
+    if regex.endswith("\\") and not regex.endswith("\\\\"):
+        regex += "\\"
+    
+    if not _validate_pc_regex(regex):
+        regex = "."
+    regex = _escape_pattern_for_seclang_rx_quotes(regex)
     return f'SecRule {rule["variable"]} "@rx {regex}" "{action}"'
 
 def find_latest_result(result_dir):

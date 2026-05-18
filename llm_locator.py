@@ -14,7 +14,7 @@ except ImportError:
 
 API_KEY = os.getenv("DASHSCOPE_API_KEY")
 MODEL_NAME = "qwen-plus"
-DATASET_PATH = ".\\output\\msu\\csic_msu_data.json"
+DATASET_PATH = ".\\output\\msu\\csic_msu_data_max.json"
 
 SYSTEM_PROMPT = """Your primary objective is to act as an expert Web Application Firewall (WAF). Your task is to analyze HTTP request segments to pinpoint malicious payloads and anomalies.
 The input JSON object contains `msu_list` (Minimal Semantic Units) and optionally `decoded_params`: a dictionary whose keys follow `<param_name>_decode` and values are decoded parameter payloads for obfuscated inputs (matching the preprocessor output).

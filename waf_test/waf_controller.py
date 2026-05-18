@@ -8,7 +8,7 @@ WAF_TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 RULES_DIR = os.path.join(os.path.dirname(WAF_TEST_DIR), "output", "waf_rules")
 
 DOCKERFILE_CONTENT = """FROM docker.m.daocloud.io/library/caddy:builder AS builder
-ENV GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=https://mirrors.aliyun.com/goproxy/,direct GOSUMDB=off
 RUN xcaddy build --with github.com/corazawaf/coraza-caddy/v2
 
 FROM docker.m.daocloud.io/library/caddy:latest
@@ -28,7 +28,6 @@ DOCKER_COMPOSE_CONTENT = """services:
 """
 
 CADDYFILE_CONTENT = """{
-    # 保证 WAF 拦截器在最前排
     order coraza_waf first
 }
 
