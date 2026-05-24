@@ -1,35 +1,26 @@
 import json
-import os
 import random
+from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-MAX_DATA_COUNT = 500
-OUTPUT_PATH = ".\\output\\msu\\csic_msu_data_max.json"
-MAX_URL_DECODE_ROUNDS = 16
+import config
 
 
-# ANOMALOUS_FILTER_KEYWORDS = (
-#     "union", "select", "script", "alert", "or ", "and ", "drop",
-#     "passwd", "%27", "%22", "1=1", "<", ">", "%3e", "%3c",
-# )
-ANOMALOUS_FILTER_KEYWORDS = ()
-
-def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
+def _iterative_smart_unquote(value, max_rounds=None):
+    if max_rounds is None:
+        max_rounds = config.MAX_URL_DECODE_ROUNDS
     cur_str = value
     for _ in range(max_rounds):
-        raw_bytes = unquote_to_bytes(cur_str.replace('+', ' '))
-        
+        raw_bytes = unquote_to_bytes(cur_str.replace("+", " "))
         try:
-            nxt_str = raw_bytes.decode('utf-8')
+            nxt_str = raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
-            nxt_str = raw_bytes.decode('latin-1')
-        
+            nxt_str = raw_bytes.decode("latin-1")
         if nxt_str == cur_str:
             break
-        
         cur_str = nxt_str
-        
     return cur_str
+
 
 def _is_kv_param_msu(msu):
     if "=" not in msu:
@@ -38,18 +29,19 @@ def _is_kv_param_msu(msu):
     key = key.strip()
     return bool(key) and (":" not in key)
 
-def collect_decoded_param_fields(msu_list):
+
+def collect_decoded_param_fields(msu_list, max_rounds=None):
     out = {}
     for msu in msu_list:
         if not _is_kv_param_msu(msu):
             continue
         key, val = msu.split("=", 1)
         key = key.strip()
-        
-        decoded = _iterative_smart_unquote(val)
+        decoded = _iterative_smart_unquote(val, max_rounds)
         if decoded != val:
             out[f"{key}_decode"] = decoded
     return out
+
 
 def parse_http_to_msu(raw_request):
     msu_list = []
@@ -60,14 +52,12 @@ def parse_http_to_msu(raw_request):
     request_line = lines[0].strip().split()
     if len(request_line) >= 2:
         msu_list.append(request_line[0])
-
         url_str = request_line[1]
         if "?" in url_str:
             path_part, query_part = url_str.split("?", 1)
             msu_list.append(path_part)
             if query_part:
-                queries = query_part.split("&")
-                for q in queries:
+                for q in query_part.split("&"):
                     if q:
                         msu_list.append(q)
         else:
@@ -85,8 +75,7 @@ def parse_http_to_msu(raw_request):
             if not line:
                 continue
             if "&" in line and "=" in line:
-                body_params = line.split("&")
-                for p in body_params:
+                for p in line.split("&"):
                     if p:
                         msu_list.append(p)
             else:
@@ -94,8 +83,16 @@ def parse_http_to_msu(raw_request):
 
     return msu_list
 
-def process_csic(filename, label):
-    if not os.path.exists(filename):
+
+def process_csic(filename, label, max_count=None, filter_keywords=None):
+    filename = Path(filename)
+    max_count = max_count if max_count is not None else config.MAX_DATA_COUNT
+    keywords = filter_keywords if filter_keywords is not None else config.ANOMALOUS_FILTER_KEYWORDS
+    keywords = keywords or ()
+    if isinstance(keywords, str):
+        keywords = (keywords,)
+
+    if not filename.exists():
         return []
 
     with open(filename, "r", encoding="utf-8", errors="ignore") as f:
@@ -114,10 +111,6 @@ def process_csic(filename, label):
         requests.append("".join(current_req))
 
     processed_data = []
-    keywords = ANOMALOUS_FILTER_KEYWORDS or ()
-    if isinstance(keywords, str):
-        keywords = (keywords,)
-
     for idx, req_str in enumerate(requests):
         req_str = req_str.strip()
         if not req_str:
@@ -138,21 +131,37 @@ def process_csic(filename, label):
             row["decoded_params"] = decoded_fields
         processed_data.append(row)
 
-        if len(processed_data) >= MAX_DATA_COUNT:
+        if len(processed_data) >= max_count:
             break
 
     return processed_data
 
-if __name__ == "__main__":
-    normal_file = ".\\data\\HTTP_DATASET_CSIC_2010\\normalTrafficTest.txt"
-    anomalous_file = ".\\data\\HTTP_DATASET_CSIC_2010\\anomalousTrafficTest.txt"
 
-    normal_data = process_csic(normal_file, "normal")
-    anomalous_data = process_csic(anomalous_file, "anomalous")
+def run_data_process(
+    normal_file=None,
+    anomalous_file=None,
+    output_path=None,
+    max_count=None,
+    filter_keywords=None,
+):
+    normal_file = Path(normal_file or config.NORMAL_FILE)
+    anomalous_file = Path(anomalous_file or config.ANOMALOUS_FILE)
+    output_path = Path(output_path or config.MSU_OUTPUT_PATH)
+
+    normal_data = process_csic(normal_file, "normal", max_count, filter_keywords)
+    anomalous_data = process_csic(anomalous_file, "anomalous", max_count, filter_keywords)
 
     final_data = normal_data + anomalous_data
     random.shuffle(final_data)
 
-    if final_data:
-        with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-            json.dump(final_data, f, indent=2, ensure_ascii=False)
+    if not final_data:
+        print("[Warning] 未生成任何 MSU 数据，请检查 dataset 路径。")
+        return {"output_path": None, "count": 0}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(final_data, f, indent=2, ensure_ascii=False)
+
+    print(f"[Summary] 已写入 {len(final_data)} 条 MSU 数据 -> {output_path}")
+    print(f"  normal={len(normal_data)}  anomalous={len(anomalous_data)}")
+    return {"output_path": str(output_path), "count": len(final_data)}

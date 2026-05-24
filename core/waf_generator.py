@@ -1,19 +1,10 @@
 import json
-import os
 import re
-import sys
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
-MERGE_THRESHOLD = 0.25
-RULE_ID_START = 9000000
-RESULT_DIR = ".\\output\\llm_results"
-OUTPUT_DIR = ".\\output\\waf_rules"
-MAX_URL_DECODE_ROUNDS = 16
-WAF_URL_DECODE_TRANSFORMS = 4
-
-NORMALIZE_LOWERCASE = True
-NORMALIZE_WHITESPACE = True
+import config
 
 HTTP_METHODS = {"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"}
 _HEADER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\-]+:\s")
@@ -48,7 +39,9 @@ def _validate_pc_regex(pc_regex):
     return True
 
 
-def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
+def _iterative_smart_unquote(value, max_rounds=None):
+    if max_rounds is None:
+        max_rounds = config.MAX_URL_DECODE_ROUNDS
     cur_str = value
     for _ in range(max_rounds):
         raw_bytes = unquote_to_bytes(cur_str.replace("+", " "))
@@ -61,6 +54,7 @@ def _iterative_smart_unquote(value, max_rounds=MAX_URL_DECODE_ROUNDS):
         cur_str = nxt_str
     return cur_str
 
+
 def _classify_msu(msu, method):
     if msu in HTTP_METHODS:
         return None
@@ -71,6 +65,7 @@ def _classify_msu(msu, method):
     if "=" in msu:
         return "ARGS_POST" if method == "POST" else "ARGS_GET"
     return None
+
 
 def _extract_payload(msu, variable, decoded_params=None):
     if variable in ("ARGS_GET", "ARGS_POST") and "=" in msu:
@@ -86,6 +81,7 @@ def _extract_payload(msu, variable, decoded_params=None):
         if m:
             return _iterative_smart_unquote(m.group(1))
     return _iterative_smart_unquote(msu)
+
 
 def extract_malicious_payloads(results):
     entries = []
@@ -105,6 +101,7 @@ def extract_malicious_payloads(results):
                 entries.append({"payload": payload, "variable": variable})
     return entries
 
+
 def edit_distance(a, b):
     m, n = len(a), len(b)
     dp = list(range(n + 1))
@@ -116,6 +113,7 @@ def edit_distance(a, b):
             dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
             prev = temp
     return dp[n]
+
 
 def lcs_two(a, b):
     m, n = len(a), len(b)
@@ -139,10 +137,10 @@ def lcs_two(a, b):
             j -= 1
     return "".join(reversed(result))
 
+
 def lcs_multiple(strings):
     if not strings:
         return ""
-    
     strings = sorted(strings, key=len)
     result = strings[0]
     for s in strings[1:]:
@@ -150,6 +148,7 @@ def lcs_multiple(strings):
         if not result:
             break
     return result
+
 
 def build_regex(lcs, all_payloads):
     if not lcs:
@@ -162,30 +161,26 @@ def build_regex(lcs, all_payloads):
     for i in range(1, len(lcs)):
         is_contiguous = True
         target_sub = current_segment + lcs[i]
-        
-        if lcs[i-1] in break_chars or lcs[i] in break_chars:
+        if lcs[i - 1] in break_chars or lcs[i] in break_chars:
             is_contiguous = False
         else:
             for payload in all_payloads:
                 if target_sub not in payload:
                     is_contiguous = False
                     break
-                
         if is_contiguous:
             current_segment += lcs[i]
         else:
             segments.append(current_segment)
             current_segment = lcs[i]
-            
+
     segments.append(current_segment)
-    
     escaped_segments = [re.escape(seg) for seg in segments if seg]
     regex_str = ".*".join(escaped_segments) if escaped_segments else None
-    
     if regex_str:
-        regex_str = re.sub(r'[^\x00-\x7F]', '.', regex_str)
-    
+        regex_str = re.sub(r"[^\x00-\x7F]", ".", regex_str)
     return regex_str
+
 
 def _find_representative(members):
     if len(members) == 1:
@@ -200,7 +195,10 @@ def _find_representative(members):
             best_rep = candidate
     return best_rep
 
-def hierarchical_cluster(payloads):
+
+def hierarchical_cluster(payloads, merge_threshold=None):
+    if merge_threshold is None:
+        merge_threshold = config.MERGE_THRESHOLD
     groups = [{"members": [p], "rep": p} for p in payloads]
 
     while True:
@@ -215,7 +213,7 @@ def hierarchical_cluster(payloads):
             for j in range(i + 1, n):
                 rep_i, rep_j = groups[i]["rep"], groups[j]["rep"]
                 d = edit_distance(rep_i, rep_j)
-                threshold = MERGE_THRESHOLD * (len(rep_i) + len(rep_j))
+                threshold = merge_threshold * (len(rep_i) + len(rep_j))
                 if d <= threshold:
                     if best_dist is None or d < best_dist:
                         best_dist = d
@@ -226,13 +224,16 @@ def hierarchical_cluster(payloads):
 
         merged = groups[best_i]["members"] + groups[best_j]["members"]
         new_rep = _find_representative(merged)
-        new_group = {"members": merged, "rep": new_rep}
         groups = [g for k, g in enumerate(groups) if k not in (best_i, best_j)]
-        groups.append(new_group)
+        groups.append({"members": merged, "rep": new_rep})
 
     return groups
 
-def generate_rules(results, rule_id_start=RULE_ID_START):
+
+def generate_rules(results, rule_id_start=None):
+    if rule_id_start is None:
+        rule_id_start = config.RULE_ID_START
+
     entries = extract_malicious_payloads(results)
     if not entries:
         return []
@@ -245,7 +246,7 @@ def generate_rules(results, rule_id_start=RULE_ID_START):
     rule_id = rule_id_start
 
     for variable, payloads in sorted(by_variable.items()):
-        if NORMALIZE_LOWERCASE:
+        if config.NORMALIZE_LOWERCASE:
             payloads = [p.strip().lower() for p in payloads]
         else:
             payloads = [p.strip() for p in payloads]
@@ -253,18 +254,14 @@ def generate_rules(results, rule_id_start=RULE_ID_START):
         clusters = hierarchical_cluster(unique_payloads)
 
         for cluster in clusters:
-            members = cluster["members"]
-            members = [m.strip() for m in members]
+            members = [m.strip() for m in cluster["members"]]
             lcs = lcs_multiple(members)
             regex = build_regex(lcs, members)
-
             if not regex:
                 regex = re.escape(cluster["rep"])
-
             regex = _sanitize_rx_for_modsecurity(regex)
             if not _validate_pc_regex(regex):
                 regex = "."
-
             rules.append(
                 {
                     "id": rule_id,
@@ -279,12 +276,13 @@ def generate_rules(results, rule_id_start=RULE_ID_START):
 
     return rules
 
+
 def format_seclang(rule):
     parts = ["t:none"]
-    parts += ["t:urlDecodeUni"] * WAF_URL_DECODE_TRANSFORMS
-    if NORMALIZE_LOWERCASE:
+    parts += ["t:urlDecodeUni"] * config.WAF_URL_DECODE_TRANSFORMS
+    if config.NORMALIZE_LOWERCASE:
         parts.append("t:lowercase")
-    if NORMALIZE_WHITESPACE:
+    if config.NORMALIZE_WHITESPACE:
         parts.append("t:compressWhitespace")
     transforms = ",".join(parts)
     action = (
@@ -292,56 +290,56 @@ def format_seclang(rule):
         f"msg:'Auto-generated WAF rule (cluster_size={rule['cluster_size']})'"
     )
     regex = _sanitize_rx_for_modsecurity(rule["regex"])
-    
     if regex.endswith("\\") and not regex.endswith("\\\\"):
         regex += "\\"
-    
     if not _validate_pc_regex(regex):
         regex = "."
     regex = _escape_pattern_for_seclang_rx_quotes(regex)
     return f'SecRule {rule["variable"]} "@rx {regex}" "{action}"'
 
-def find_latest_result(result_dir):
-    if not os.path.exists(result_dir):
+
+def find_latest_result(result_dir=None):
+    result_dir = Path(result_dir or config.LLM_RESULTS_DIR)
+    if not result_dir.exists():
         return None
     candidates = [
-        f for f in os.listdir(result_dir)
-        if f.startswith("llm_predicted_results_") and f.endswith(".json")
+        f for f in result_dir.iterdir()
+        if f.name.startswith("llm_predicted_results_") and f.suffix == ".json"
     ]
     if not candidates:
         return None
-    candidates.sort(reverse=True)
-    return os.path.join(result_dir, candidates[0])
+    return str(max(candidates, key=lambda p: p.name))
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        input_file = sys.argv[1]
-    else:
-        input_file = find_latest_result(RESULT_DIR)
+
+def run_rule_generation(input_file=None, output_dir=None):
+    if input_file is None:
+        input_file = find_latest_result()
         if input_file is None:
-            print(f"[Error] 在 {RESULT_DIR} 中未找到任何结果文件")
-            sys.exit(1)
+            print(f"[Error] 在 {config.LLM_RESULTS_DIR} 中未找到任何结果文件")
+            return {"conf_path": None, "json_path": None, "rule_count": 0}
         print(f"[Info] 使用最新结果文件: {input_file}")
 
-    if not os.path.exists(input_file):
+    input_file = Path(input_file)
+    output_dir = Path(output_dir or config.WAF_RULES_DIR)
+
+    if not input_file.exists():
         print(f"[Error] 找不到文件: {input_file}")
-        sys.exit(1)
+        return {"conf_path": None, "json_path": None, "rule_count": 0}
 
     with open(input_file, "r", encoding="utf-8") as f:
         results = json.load(f)
 
     print(f"[Info] 已加载 {len(results)} 条预测结果，开始生成 WAF 规则...")
-
     rules = generate_rules(results)
 
     if not rules:
         print("[Warning] 未提取到任何恶意载荷，无规则生成。")
-        sys.exit(0)
+        return {"conf_path": None, "json_path": None, "rule_count": 0}
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_conf = os.path.join(OUTPUT_DIR, f"waf_rules_{stamp}.conf")
-    output_json = os.path.join(OUTPUT_DIR, f"waf_rules_{stamp}.json")
+    output_conf = output_dir / f"waf_rules_{stamp}.conf"
+    output_json = output_dir / f"waf_rules_{stamp}.json"
 
     with open(output_conf, "w", encoding="utf-8") as f:
         f.write("# Auto-generated WAF rules\n")
@@ -355,14 +353,18 @@ if __name__ == "__main__":
 
     by_variable_count = {}
     for rule in rules:
-        variable = rule["variable"]
-        by_variable_count[variable] = by_variable_count.get(variable, 0) + 1
+        by_variable_count[rule["variable"]] = by_variable_count.get(rule["variable"], 0) + 1
 
     print(f"\n[Summary] 共生成 {len(rules)} 条规则")
     print("  按变量统计:")
     for variable in sorted(by_variable_count):
         print(f"    {variable}: {by_variable_count[variable]}")
-
     print(f"\n[Info] 规则已保存至:")
     print(f"  {output_conf}")
     print(f"  {output_json}")
+
+    return {
+        "conf_path": str(output_conf),
+        "json_path": str(output_json),
+        "rule_count": len(rules),
+    }

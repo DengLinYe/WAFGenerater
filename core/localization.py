@@ -1,20 +1,18 @@
 import json
-import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 
 from openai import APIError, OpenAI
+
+import config
 
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None
-
-API_KEY = os.getenv("DASHSCOPE_API_KEY")
-MODEL_NAME = "qwen-plus"
-DATASET_PATH = ".\\output\\msu\\csic_msu_data_max.json"
 
 SYSTEM_PROMPT = """Your primary objective is to act as an expert Web Application Firewall (WAF). Your task is to analyze HTTP request segments to pinpoint malicious payloads and anomalies.
 The input JSON object contains `msu_list` (Minimal Semantic Units) and optionally `decoded_params`: a dictionary whose keys follow `<param_name>_decode` and values are decoded parameter payloads for obfuscated inputs (matching the preprocessor output).
@@ -27,10 +25,12 @@ CORE ANALYSIS CRITERIA:
 FORMAT REQUIREMENTS:
 Return ONLY a valid JSON dictionary. Do NOT wrap the JSON in markdown blocks (e.g., ```json). Do NOT provide any explanations, comments, or introductory text. The output must be strictly parseable by standard JSON libraries."""
 
-client = OpenAI(
-    api_key=API_KEY,
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
+
+def _get_client():
+    return OpenAI(
+        api_key=config.DASHSCOPE_API_KEY,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
 
 
 def build_llm_input(req):
@@ -41,9 +41,12 @@ def build_llm_input(req):
     return body
 
 
-def locate_payload_with_llm(llm_input):
+def locate_payload_with_llm(llm_input, model_name=None):
+    if model_name is None:
+        model_name = config.MODEL_NAME
     if isinstance(llm_input, list):
         llm_input = {"msu_list": llm_input}
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -68,25 +71,23 @@ def locate_payload_with_llm(llm_input):
         },
     ]
 
+    client = _get_client()
     try:
         completion = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=model_name,
             messages=messages,
             response_format={"type": "json_object"},
             stream=False,
         )
-
         result_text = completion.choices[0].message.content
         return json.loads(result_text)
-
     except APIError as e:
         error_msg = str(e)
         if "403" in error_msg and "AllocationQuota" in error_msg:
             print("\n[Error] 免费额度已完全耗尽!")
             return "QUOTA_EXHAUSTED"
-        else:
-            print(f"[Error] API 调用失败 (非额度问题): {e}")
-            return None
+        print(f"[Error] API 调用失败 (非额度问题): {e}")
+        return None
     except Exception as e:
         print(f"[Error] 代码或网络解析异常: {e}")
         return None
@@ -118,39 +119,55 @@ def _summarize_localization(results):
             fn_ids.append(req.get("id"))
     total = tp + tn + fp + fn
     accuracy = (tp + tn) / total if total else 0.0
-    return accuracy, fp_ids, fn_ids, tp, tn, fp, fn, total
+    return {
+        "accuracy": accuracy,
+        "fp_ids": fp_ids,
+        "fn_ids": fn_ids,
+        "TP": tp,
+        "TN": tn,
+        "FP": fp,
+        "FN": fn,
+        "total": total,
+    }
 
 
-if __name__ == "__main__":
-    _output_dir = ".\\output\\llm_results"
-    os.makedirs(_output_dir, exist_ok=True)
-    _stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = os.path.join(
-        _output_dir,
-        f"llm_predicted_results_{_stamp}.json",
-    )
+def run_localization(
+    dataset_path=None,
+    output_dir=None,
+    model_name=None,
+    max_workers=None,
+):
+    dataset_path = Path(dataset_path or config.MSU_OUTPUT_PATH)
+    output_dir = Path(output_dir or config.LLM_RESULTS_DIR)
+    model_name = model_name or config.MODEL_NAME
+    max_workers = max_workers or config.LLM_MAX_WORKERS
 
-    if not os.path.exists(DATASET_PATH):
-        print(f"[Error] 找不到数据文件: {DATASET_PATH}")
-        sys.exit(1)
+    if not dataset_path.exists():
+        print(f"[Error] 找不到数据文件: {dataset_path}")
+        return {"output_path": None, "count": 0}
 
-    with open(DATASET_PATH, "r", encoding="utf-8") as f:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file = output_dir / f"llm_predicted_results_{stamp}.json"
+
+    with open(dataset_path, "r", encoding="utf-8") as f:
         dataset = json.load(f)
 
     n_total = len(dataset)
-    print(f"[Info] 开始调用 {MODEL_NAME} 进行恶意载荷定位，共 {n_total} 条")
+    print(f"[Info] 开始调用 {model_name} 进行恶意载荷定位，共 {n_total} 条")
 
     results = []
     quota_exhausted = False
     completed = 0
     failed_ids = []
     tqdm_disable = tqdm is None
-
     total_start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_req = {
-            executor.submit(locate_payload_with_llm, build_llm_input(req)): req
+            executor.submit(
+                locate_payload_with_llm, build_llm_input(req), model_name
+            ): req
             for req in dataset
         }
 
@@ -164,18 +181,13 @@ if __name__ == "__main__":
                 dynamic_ncols=True,
                 smoothing=0.05,
             )
-        iterator = as_completed(future_to_req)
 
-        for future in iterator:
+        for future in as_completed(future_to_req):
             req = future_to_req[future]
             try:
                 predicted_json = future.result()
-
                 if predicted_json == "QUOTA_EXHAUSTED":
-                    print(
-                        "[Warning] 额度耗尽，停止提交新任务。",
-                        file=sys.stderr,
-                    )
+                    print("[Warning] 额度耗尽，停止提交新任务。", file=sys.stderr)
                     quota_exhausted = True
                     executor.shutdown(wait=False, cancel_futures=True)
                 elif predicted_json:
@@ -183,7 +195,6 @@ if __name__ == "__main__":
                     results.append(req)
                 else:
                     failed_ids.append(req.get("id"))
-
             except Exception as exc:
                 failed_ids.append(req.get("id"))
                 print(f"[Error] ID:{req['id']} 异常: {exc}", file=sys.stderr)
@@ -199,7 +210,7 @@ if __name__ == "__main__":
                     f"\r[{bar}] {completed}/{n_total} ETA {eta_s:.0f}s "
                 )
                 sys.stderr.flush()
-            else:
+            elif progress:
                 progress.update(1)
                 eta_s = (elapsed / completed) * max(0, n_total - completed)
                 progress.set_postfix(
@@ -213,34 +224,35 @@ if __name__ == "__main__":
         if tqdm_disable:
             sys.stderr.write("\n")
             sys.stderr.flush()
-        else:
+        elif progress:
             progress.close()
 
     total_wall = time.time() - total_start_time
     avg_each = total_wall / completed if completed else 0.0
 
-    if results:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-
-        acc, fp_ids, fn_ids, tp, tn, fp, fn, labelled = _summarize_localization(
-            results
-        )
-
-        print(f"\n[Summary] 成功写入 {len(results)} 条 -> {output_file}")
-        print(f"  请求级准确率 (仅成功返回的 {labelled} 条): {acc:.2%}")
-        print(f"  TP={tp} TN={tn} FP={fp} FN={fn}")
-        print(f"  误报 (正常判恶) ID: {fp_ids}")
-        print(f"  漏报 (异常未判恶) ID: {fn_ids}")
-        print(f"  总耗时: {total_wall:.2f}s  平均每条完成耗时: {avg_each:.2f}s")
-        if failed_ids:
-            print(f"  [Note] API/解析失败 {len(failed_ids)} 条，未计入上表。")
-            print(f"  失败 ID: {failed_ids}")
-        if quota_exhausted:
-            print(
-                "[Warning] 额度已耗尽，请更换 API Key 后处理未完成数据。",
-                file=sys.stderr,
-            )
-    else:
+    if not results:
         print("\n[Warning] 未获得任何有效结果，文件未保存。")
         print(f"  总耗时: {total_wall:.2f}s  平均每条完成耗时: {avg_each:.2f}s")
+        return {"output_path": None, "count": 0, "metrics": None}
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+    metrics = _summarize_localization(results)
+    print(f"\n[Summary] 成功写入 {len(results)} 条 -> {output_file}")
+    print(f"  请求级准确率 (仅成功返回的 {metrics['total']} 条): {metrics['accuracy']:.2%}")
+    print(f"  TP={metrics['TP']} TN={metrics['TN']} FP={metrics['FP']} FN={metrics['FN']}")
+    print(f"  误报 (正常判恶) ID: {metrics['fp_ids']}")
+    print(f"  漏报 (异常未判恶) ID: {metrics['fn_ids']}")
+    print(f"  总耗时: {total_wall:.2f}s  平均每条完成耗时: {avg_each:.2f}s")
+    if failed_ids:
+        print(f"  [Note] API/解析失败 {len(failed_ids)} 条，未计入上表。")
+        print(f"  失败 ID: {failed_ids}")
+    if quota_exhausted:
+        print("[Warning] 额度已耗尽，请更换 API Key 后处理未完成数据。", file=sys.stderr)
+
+    return {
+        "output_path": str(output_file),
+        "count": len(results),
+        "metrics": metrics,
+    }
